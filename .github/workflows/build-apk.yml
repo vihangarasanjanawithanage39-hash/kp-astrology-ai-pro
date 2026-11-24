@@ -1,4 +1,4 @@
-name: Auto Unzip & Publish Direct APK
+name: Live Auto-Update Web & Build KP APK
 
 on:
   push:
@@ -7,9 +7,58 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
 
 jobs:
-  build-android-apk:
+  deploy-live-web:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Auto-Unzip Latest ZIP for Live Auto-Update
+        run: |
+          ZIP_FILE=$(ls -t *.zip 2>/dev/null | head -n 1 || true)
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No .zip file found in repository root!"
+            exit 1
+          fi
+          rm -rf app_src www
+          mkdir -p app_src www
+          unzip -o "$ZIP_FILE" -d app_src
+
+          SRC_DIR="app_src"
+          if [ ! -f "$SRC_DIR/index.html" ]; then
+            FOUND=$(find "$SRC_DIR" -maxdepth 3 -name "index.html" | head -n 1)
+            [ -n "$FOUND" ] && SRC_DIR=$(dirname "$FOUND")
+          fi
+
+          for f in index.html index-si.html kp-ui.css kp-ui.js kp-ai.js kp-rules.js manifest.json manifest.webmanifest sw.js favicon.png icon-192.png icon-512.png icon-maskable-192.png icon-maskable-512.png apple-touch-icon.png og-image.png astronomy.browser.min.js; do
+            [ -f "$SRC_DIR/$f" ] && cp "$SRC_DIR/$f" www/
+          done
+          touch www/.nojekyll
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Live Web Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'www'
+
+      - name: Deploy Live Auto-Update Server (GitHub Pages)
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  build-live-sync-apk:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -26,14 +75,13 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Auto-Unzip Uploaded ZIP & Prepare www/
+      - name: Prepare Bundled Offline Fallback & Live-Sync Config
         run: |
           ZIP_FILE=$(ls -t *.zip 2>/dev/null | head -n 1 || true)
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: No .zip file found in repository root!"
             exit 1
           fi
-          echo "Unzipping: $ZIP_FILE"
           rm -rf app_src www
           mkdir -p app_src www
           unzip -o "$ZIP_FILE" -d app_src
@@ -41,26 +89,42 @@ jobs:
           SRC_DIR="app_src"
           if [ ! -f "$SRC_DIR/index.html" ]; then
             FOUND=$(find "$SRC_DIR" -maxdepth 3 -name "index.html" | head -n 1)
-            if [ -n "$FOUND" ]; then
-              SRC_DIR=$(dirname "$FOUND")
-            fi
+            [ -n "$FOUND" ] && SRC_DIR=$(dirname "$FOUND")
           fi
 
           for f in index.html index-si.html kp-ui.css kp-ui.js kp-ai.js kp-rules.js manifest.json manifest.webmanifest sw.js favicon.png icon-192.png icon-512.png icon-maskable-192.png icon-maskable-512.png apple-touch-icon.png og-image.png astronomy.browser.min.js; do
-            if [ -f "$SRC_DIR/$f" ]; then cp "$SRC_DIR/$f" www/; fi
+            [ -f "$SRC_DIR/$f" ] && cp "$SRC_DIR/$f" www/
           done
 
-          [ -f "$SRC_DIR/package.json" ] && cp "$SRC_DIR/package.json" ./package.json
-          [ -f "$SRC_DIR/capacitor.config.json" ] && cp "$SRC_DIR/capacitor.config.json" ./capacitor.config.json
           [ -f "$SRC_DIR/icon-512.png" ] && cp "$SRC_DIR/icon-512.png" ./icon-512.png
-
+          [ -f "$SRC_DIR/package.json" ] && cp "$SRC_DIR/package.json" ./package.json
           if [ ! -f package.json ]; then
-            printf '%s\n' '{"name":"kp-astrology-ai-pro","version":"10.0.0","private":true,"dependencies":{"@capacitor/core":"^6.1.2"},"devDependencies":{"@capacitor/android":"^6.1.2","@capacitor/cli":"^6.1.2"}}' > package.json
+            printf '%s\n' '{"name":"kp-astrology-ai-pro","version":"11.0.0","private":true,"dependencies":{"@capacitor/core":"^6.1.2"},"devDependencies":{"@capacitor/android":"^6.1.2","@capacitor/cli":"^6.1.2"}}' > package.json
           fi
 
-          if [ ! -f capacitor.config.json ]; then
-            printf '%s\n' '{"appId":"com.kpastrology.aipro","appName":"KP Astrology AI Pro","webDir":"www","server":{"androidScheme":"https","cleartext":true},"android":{"allowMixedContent":true,"backgroundColor":"#060d14"}}' > capacitor.config.json
-          fi
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO_NAME="${{ github.event.repository.name }}"
+          LIVE_URL="https://${OWNER_LC}.github.io/${REPO_NAME}/"
+          echo "Configured Live Auto-Update URL: $LIVE_URL"
+
+          cat > capacitor.config.json << EOF
+          {
+            "appId": "com.kpastrology.aipro",
+            "appName": "KP Astrology AI Pro",
+            "webDir": "www",
+            "server": {
+              "url": "${LIVE_URL}",
+              "errorPath": "index.html",
+              "androidScheme": "https",
+              "cleartext": true,
+              "allowNavigation": ["${OWNER_LC}.github.io"]
+            },
+            "android": {
+              "allowMixedContent": true,
+              "backgroundColor": "#060d14"
+            }
+          }
+          EOF
 
       - name: Install Capacitor & Generate Android Project
         run: |
@@ -111,7 +175,7 @@ jobs:
               print("Icon step skipped:", e)
           EOF
 
-      - name: Build Android APK
+      - name: Build Live-Sync Auto-Update APK
         working-directory: android
         run: |
           chmod +x gradlew
@@ -121,15 +185,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp android/app/build/outputs/apk/debug/app-debug.apk KP-Astrology-AI-Pro-v10.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk KP-Astrology-AI-Pro-AutoUpdate.apk
           if gh release view latest >/dev/null 2>&1; then
-            gh release upload latest KP-Astrology-AI-Pro-v10.apk --clobber
+            gh release upload latest KP-Astrology-AI-Pro-AutoUpdate.apk --clobber
           else
-            gh release create latest KP-Astrology-AI-Pro-v10.apk \
-              --title "KP Astrology AI Pro v10" \
-              --notes "Direct Android APK download — KP Astrology AI Pro v10 (Zero-Key Free AI Guru + All Unlocked)."
+            gh release create latest KP-Astrology-AI-Pro-AutoUpdate.apk \
+              --title "KP Astrology AI Pro (Auto-Update Edition)" \
+              --notes "One-time install APK with automatic live updates via GitHub Pages + offline fallback."
           fi
-          DL_URL="https://github.com/${{ github.repository }}/releases/latest/download/KP-Astrology-AI-Pro-v10.apk"
-          echo "### 📲 Direct .APK Download Link" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          WEB_URL="https://${OWNER_LC}.github.io/${{ github.event.repository.name }}/"
+          DL_URL="https://github.com/${{ github.repository }}/releases/latest/download/KP-Astrology-AI-Pro-AutoUpdate.apk"
+          echo "### 📲 Direct Auto-Update .APK Download Link" >> $GITHUB_STEP_SUMMARY
           echo "[$DL_URL]($DL_URL)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🌐 Live Web App (Auto-Sync Source)" >> $GITHUB_STEP_SUMMARY
+          echo "[$WEB_URL]($WEB_URL)" >> $GITHUB_STEP_SUMMARY
