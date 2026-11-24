@@ -1,4 +1,4 @@
-name: Live Auto-Update Web & Build KP APK
+name: Build 100% Offline KP APK & Live Web
 
 on:
   push:
@@ -22,7 +22,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Auto-Unzip Latest ZIP for Live Auto-Update
+      - name: Auto-Unzip Latest ZIP & Bundle Offline Ephemeris
         run: |
           ZIP_FILE=$(ls -t *.zip 2>/dev/null | head -n 1 || true)
           if [ -z "$ZIP_FILE" ]; then
@@ -42,6 +42,11 @@ jobs:
           for f in index.html index-si.html kp-ui.css kp-ui.js kp-ai.js kp-rules.js manifest.json manifest.webmanifest sw.js favicon.png icon-192.png icon-512.png icon-maskable-192.png icon-maskable-512.png apple-touch-icon.png og-image.png astronomy.browser.min.js; do
             [ -f "$SRC_DIR/$f" ] && cp "$SRC_DIR/$f" www/
           done
+
+          curl -fsSL https://cdn.jsdelivr.net/npm/astronomy-engine@2.1.19/astronomy.browser.min.js -o www/astronomy.browser.min.js || true
+          if [ -s www/astronomy.browser.min.js ]; then
+            sed -i 's|https://cdn.jsdelivr.net/npm/astronomy-engine@2.1.19/astronomy.browser.min.js|astronomy.browser.min.js|g' www/index.html www/index-si.html
+          fi
           touch www/.nojekyll
 
       - name: Setup Pages
@@ -59,11 +64,11 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Deploy Live Auto-Update Server (GitHub Pages)
+      - name: Deploy Live Web App (GitHub Pages)
         id: deployment
         uses: actions/deploy-pages@v5
 
-  build-live-sync-apk:
+  build-offline-apk:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -80,7 +85,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Prepare Bundled Offline Fallback & Live-Sync Config
+      - name: Prepare 100% Offline Bundle in www/
         run: |
           ZIP_FILE=$(ls -t *.zip 2>/dev/null | head -n 1 || true)
           if [ -z "$ZIP_FILE" ]; then
@@ -101,28 +106,25 @@ jobs:
             [ -f "$SRC_DIR/$f" ] && cp "$SRC_DIR/$f" www/
           done
 
+          curl -fsSL https://cdn.jsdelivr.net/npm/astronomy-engine@2.1.19/astronomy.browser.min.js -o www/astronomy.browser.min.js || true
+          if [ -s www/astronomy.browser.min.js ]; then
+            sed -i 's|https://cdn.jsdelivr.net/npm/astronomy-engine@2.1.19/astronomy.browser.min.js|astronomy.browser.min.js|g' www/index.html www/index-si.html
+          fi
+
           [ -f "$SRC_DIR/icon-512.png" ] && cp "$SRC_DIR/icon-512.png" ./icon-512.png
           [ -f "$SRC_DIR/package.json" ] && cp "$SRC_DIR/package.json" ./package.json
           if [ ! -f package.json ]; then
-            printf '%s\n' '{"name":"kp-astrology-ai-pro","version":"11.0.0","private":true,"dependencies":{"@capacitor/core":"^6.1.2"},"devDependencies":{"@capacitor/android":"^6.1.2","@capacitor/cli":"^6.1.2"}}' > package.json
+            printf '%s\n' '{"name":"kp-astrology-ai-pro","version":"14.0.0","private":true,"dependencies":{"@capacitor/core":"^6.1.2"},"devDependencies":{"@capacitor/android":"^6.1.2","@capacitor/cli":"^6.1.2"}}' > package.json
           fi
 
-          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          REPO_NAME="${{ github.event.repository.name }}"
-          LIVE_URL="https://${OWNER_LC}.github.io/${REPO_NAME}/"
-          echo "Configured Live Auto-Update URL: $LIVE_URL"
-
-          cat > capacitor.config.json << EOF
+          cat > capacitor.config.json << 'EOF'
           {
             "appId": "com.kpastrology.aipro",
             "appName": "KP Astrology AI Pro",
             "webDir": "www",
             "server": {
-              "url": "${LIVE_URL}",
-              "errorPath": "index.html",
               "androidScheme": "https",
-              "cleartext": true,
-              "allowNavigation": ["${OWNER_LC}.github.io"]
+              "cleartext": true
             },
             "android": {
               "allowMixedContent": true,
@@ -180,7 +182,7 @@ jobs:
               print("Icon step skipped:", e)
           EOF
 
-      - name: Build Live-Sync Auto-Update APK
+      - name: Build 100% Offline Android APK
         working-directory: android
         run: |
           chmod +x gradlew
@@ -190,19 +192,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp android/app/build/outputs/apk/debug/app-debug.apk KP-Astrology-AI-Pro-AutoUpdate.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk KP-Astrology-AI-Pro-Offline.apk
           if gh release view latest >/dev/null 2>&1; then
-            gh release upload latest KP-Astrology-AI-Pro-AutoUpdate.apk --clobber
+            gh release upload latest KP-Astrology-AI-Pro-Offline.apk --clobber
           else
-            gh release create latest KP-Astrology-AI-Pro-AutoUpdate.apk \
-              --title "KP Astrology AI Pro (Auto-Update Edition)" \
-              --notes "One-time install APK with automatic live updates via GitHub Pages + offline fallback."
+            gh release create latest KP-Astrology-AI-Pro-Offline.apk \
+              --title "KP Astrology AI Pro (100% Offline Edition)" \
+              --notes "100% Offline Android APK with bundled Astronomy Engine, 447 KP Rules & Offline/Online AI Guru."
           fi
           OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           WEB_URL="https://${OWNER_LC}.github.io/${{ github.event.repository.name }}/"
-          DL_URL="https://github.com/${{ github.repository }}/releases/latest/download/KP-Astrology-AI-Pro-AutoUpdate.apk"
-          echo "### 📲 Direct Auto-Update .APK Download Link" >> $GITHUB_STEP_SUMMARY
+          DL_URL="https://github.com/${{ github.repository }}/releases/latest/download/KP-Astrology-AI-Pro-Offline.apk"
+          echo "### 📲 Direct 100% Offline .APK Download Link" >> $GITHUB_STEP_SUMMARY
           echo "[$DL_URL]($DL_URL)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🌐 Live Web App (Auto-Sync Source)" >> $GITHUB_STEP_SUMMARY
+          echo "### 🌐 Auto-Updating Live Web App (PWA)" >> $GITHUB_STEP_SUMMARY
           echo "[$WEB_URL]($WEB_URL)" >> $GITHUB_STEP_SUMMARY
