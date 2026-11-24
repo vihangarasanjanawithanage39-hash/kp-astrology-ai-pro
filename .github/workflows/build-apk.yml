@@ -1,0 +1,134 @@
+name: Auto Unzip & Build KP APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-android-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Auto-Unzip Uploaded ZIP & Prepare www/
+        run: |
+          ZIP_FILE=$(ls -t *.zip 2>/dev/null | head -n 1 || true)
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No .zip file found in repository root!"
+            exit 1
+          fi
+          echo "Unzipping: $ZIP_FILE"
+          rm -rf app_src www
+          mkdir -p app_src www
+          unzip -o "$ZIP_FILE" -d app_src
+
+          SRC_DIR="app_src"
+          if [ ! -f "$SRC_DIR/index.html" ]; then
+            FOUND=$(find "$SRC_DIR" -maxdepth 3 -name "index.html" | head -n 1)
+            if [ -n "$FOUND" ]; then
+              SRC_DIR=$(dirname "$FOUND")
+            fi
+          fi
+          echo "Detected web root: $SRC_DIR"
+
+          for f in index.html index-si.html kp-ui.css kp-ui.js kp-ai.js kp-rules.js manifest.json manifest.webmanifest sw.js favicon.png icon-192.png icon-512.png icon-maskable-192.png icon-maskable-512.png apple-touch-icon.png og-image.png astronomy.browser.min.js; do
+            if [ -f "$SRC_DIR/$f" ]; then cp "$SRC_DIR/$f" www/; fi
+          done
+
+          if [ -f "$SRC_DIR/package.json" ]; then cp "$SRC_DIR/package.json" ./package.json; fi
+          if [ -f "$SRC_DIR/capacitor.config.json" ]; then cp "$SRC_DIR/capacitor.config.json" ./capacitor.config.json; fi
+          if [ -f "$SRC_DIR/icon-512.png" ]; then cp "$SRC_DIR/icon-512.png" ./icon-512.png; fi
+
+          if [ ! -f package.json ]; then
+            cat > package.json << 'PKG'
+          {"name":"kp-astrology-ai-pro","version":"10.0.0","private":true,"dependencies":{"@capacitor/core":"^6.1.2"},"devDependencies":{"@capacitor/android":"^6.1.2","@capacitor/cli":"^6.1.2"}}
+          PKG
+          fi
+
+          if [ ! -f capacitor.config.json ]; then
+            cat > capacitor.config.json << 'CAP'
+          {"appId":"com.kpastrology.aipro","appName":"KP Astrology AI Pro","webDir":"www","server":{"androidScheme":"https","cleartext":true},"android":{"allowMixedContent":true,"backgroundColor":"#060d14"}}
+          CAP
+          fi
+
+          ls -la www/
+
+      - name: Install Capacitor & Generate Android Project
+        run: |
+          npm install --no-audit --no-fund
+          npx cap add android
+          npx cap sync android
+
+      - name: Apply Custom Midnight-Cyan App Icons & Permissions
+        run: |
+          python3 -c "import PIL" 2>/dev/null || python3 -m pip install --break-system-packages --quiet pillow || true
+          python3 - << 'EOF'
+          import os
+          mf = 'android/app/src/main/AndroidManifest.xml'
+          with open(mf, 'r', encoding='utf-8') as f:
+              xml = f.read()
+          perms = [
+              '<uses-permission android:name="android.permission.INTERNET" />',
+              '<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />',
+              '<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />',
+              '<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />'
+          ]
+          for p in perms:
+              if p not in xml:
+                  xml = xml.replace('<application', p + '\n    <application', 1)
+          if 'usesCleartextTraffic' not in xml:
+              xml = xml.replace('<application', '<application android:usesCleartextTraffic="true"', 1)
+          with open(mf, 'w', encoding='utf-8') as f:
+              f.write(xml)
+
+          try:
+              from PIL import Image
+              if os.path.exists('icon-512.png'):
+                  src = Image.open('icon-512.png').convert('RGBA')
+                  sizes = {'mipmap-mdpi': 48, 'mipmap-hdpi': 72, 'mipmap-xhdpi': 96, 'mipmap-xxhdpi': 144, 'mipmap-xxxhdpi': 192}
+                  res_dir = 'android/app/src/main/res'
+                  for folder, sz in sizes.items():
+                      d = os.path.join(res_dir, folder)
+                      if os.path.isdir(d):
+                          im = src.resize((sz, sz), Image.Resampling.LANCZOS)
+                          for target in ['ic_launcher.png', 'ic_launcher_round.png', 'ic_launcher_foreground.png']:
+                              im.save(os.path.join(d, target), 'PNG')
+                  ad = os.path.join(res_dir, 'mipmap-anydpi-v26')
+                  if os.path.isdir(ad):
+                      for fn in os.listdir(ad):
+                          if fn.endswith('.xml'):
+                              os.remove(os.path.join(ad, fn))
+          except Exception as e:
+              print("Icon step skipped:", e)
+          EOF
+
+      - name: Build Android APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Rename APK
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk KP-Astrology-AI-Pro-v10.apk
+          ls -lh KP-Astrology-AI-Pro-v10.apk
+
+      - name: Upload Downloadable APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KP-Astrology-AI-Pro-v10-APK
+          path: KP-Astrology-AI-Pro-v10.apk
+          retention-days: 30
