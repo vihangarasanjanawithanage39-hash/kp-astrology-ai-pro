@@ -1,9 +1,12 @@
-name: Auto Unzip & Build KP APK
+name: Auto Unzip & Publish Direct APK
 
 on:
   push:
     branches: [ main, master ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build-android-apk:
@@ -42,29 +45,22 @@ jobs:
               SRC_DIR=$(dirname "$FOUND")
             fi
           fi
-          echo "Detected web root: $SRC_DIR"
 
           for f in index.html index-si.html kp-ui.css kp-ui.js kp-ai.js kp-rules.js manifest.json manifest.webmanifest sw.js favicon.png icon-192.png icon-512.png icon-maskable-192.png icon-maskable-512.png apple-touch-icon.png og-image.png astronomy.browser.min.js; do
             if [ -f "$SRC_DIR/$f" ]; then cp "$SRC_DIR/$f" www/; fi
           done
 
-          if [ -f "$SRC_DIR/package.json" ]; then cp "$SRC_DIR/package.json" ./package.json; fi
-          if [ -f "$SRC_DIR/capacitor.config.json" ]; then cp "$SRC_DIR/capacitor.config.json" ./capacitor.config.json; fi
-          if [ -f "$SRC_DIR/icon-512.png" ]; then cp "$SRC_DIR/icon-512.png" ./icon-512.png; fi
+          [ -f "$SRC_DIR/package.json" ] && cp "$SRC_DIR/package.json" ./package.json
+          [ -f "$SRC_DIR/capacitor.config.json" ] && cp "$SRC_DIR/capacitor.config.json" ./capacitor.config.json
+          [ -f "$SRC_DIR/icon-512.png" ] && cp "$SRC_DIR/icon-512.png" ./icon-512.png
 
           if [ ! -f package.json ]; then
-            cat > package.json << 'PKG'
-          {"name":"kp-astrology-ai-pro","version":"10.0.0","private":true,"dependencies":{"@capacitor/core":"^6.1.2"},"devDependencies":{"@capacitor/android":"^6.1.2","@capacitor/cli":"^6.1.2"}}
-          PKG
+            printf '%s\n' '{"name":"kp-astrology-ai-pro","version":"10.0.0","private":true,"dependencies":{"@capacitor/core":"^6.1.2"},"devDependencies":{"@capacitor/android":"^6.1.2","@capacitor/cli":"^6.1.2"}}' > package.json
           fi
 
           if [ ! -f capacitor.config.json ]; then
-            cat > capacitor.config.json << 'CAP'
-          {"appId":"com.kpastrology.aipro","appName":"KP Astrology AI Pro","webDir":"www","server":{"androidScheme":"https","cleartext":true},"android":{"allowMixedContent":true,"backgroundColor":"#060d14"}}
-          CAP
+            printf '%s\n' '{"appId":"com.kpastrology.aipro","appName":"KP Astrology AI Pro","webDir":"www","server":{"androidScheme":"https","cleartext":true},"android":{"allowMixedContent":true,"backgroundColor":"#060d14"}}' > capacitor.config.json
           fi
-
-          ls -la www/
 
       - name: Install Capacitor & Generate Android Project
         run: |
@@ -121,14 +117,19 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
-      - name: Rename APK
+      - name: Publish Direct .APK Link (GitHub Release)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cp android/app/build/outputs/apk/debug/app-debug.apk KP-Astrology-AI-Pro-v10.apk
-          ls -lh KP-Astrology-AI-Pro-v10.apk
-
-      - name: Upload Downloadable APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: KP-Astrology-AI-Pro-v10-APK
-          path: KP-Astrology-AI-Pro-v10.apk
-          retention-days: 30
+          if gh release view latest >/dev/null 2>&1; then
+            gh release upload latest KP-Astrology-AI-Pro-v10.apk --clobber
+          else
+            gh release create latest KP-Astrology-AI-Pro-v10.apk \
+              --title "KP Astrology AI Pro v10" \
+              --notes "Direct Android APK download — KP Astrology AI Pro v10 (Zero-Key Free AI Guru + All Unlocked)."
+          fi
+          DL_URL="https://github.com/${{ github.repository }}/releases/latest/download/KP-Astrology-AI-Pro-v10.apk"
+          echo "### 📲 Direct .APK Download Link" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "[$DL_URL]($DL_URL)" >> $GITHUB_STEP_SUMMARY
