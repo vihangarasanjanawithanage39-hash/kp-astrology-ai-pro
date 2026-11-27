@@ -158,6 +158,7 @@ jobs:
           import os, re
           for path, pat, rep in [
               ('android/variables.gradle', r'compileSdkVersion\s*=\s*\d+', 'compileSdkVersion = 35'),
+              ('android/variables.gradle', r'minSdkVersion\s*=\s*\d+', 'minSdkVersion = 23'),
               ('android/build.gradle', r'com\.android\.tools\.build:gradle:[0-9.]+', 'com.android.tools.build:gradle:8.6.1'),
               ('android/gradle/wrapper/gradle-wrapper.properties', r'gradle-[0-9.]+-(all|bin)\.zip', 'gradle-8.7-all.zip')
           ]:
@@ -223,10 +224,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cp android/app/build/outputs/apk/debug/app-debug.apk KP-Astrology-AI-Pro-Offline.apk
-          if gh release view latest >/dev/null 2>&1; then
-            gh release upload latest KP-Astrology-AI-Pro-Offline.apk --clobber
+          if gh release view latest -R "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload latest KP-Astrology-AI-Pro-Offline.apk --clobber -R "${{ github.repository }}"
           else
-            gh release create latest KP-Astrology-AI-Pro-Offline.apk --title "KP Astrology AI Pro (120Hz Offline + Auto-Update)" --notes "One-time install APK with 120Hz, 100% Offline & Silent OTA Auto-Update."
+            gh release create latest KP-Astrology-AI-Pro-Offline.apk -R "${{ github.repository }}" --title "KP Astrology AI Pro (120Hz Offline + Auto-Update)" --notes "One-time install APK with 120Hz, 100% Offline & Silent OTA Auto-Update."
           fi
           OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "### 📲 Direct APK: https://github.com/${{ github.repository }}/releases/latest/download/KP-Astrology-AI-Pro-Offline.apk" >> $GITHUB_STEP_SUMMARY
