@@ -1,4 +1,4 @@
-name: Build 100% Offline KP APK & Live Web
+name: Build 120Hz Offline KP APK & Live Web
 
 on:
   push:
@@ -114,7 +114,7 @@ jobs:
           [ -f "$SRC_DIR/icon-512.png" ] && cp "$SRC_DIR/icon-512.png" ./icon-512.png
           [ -f "$SRC_DIR/package.json" ] && cp "$SRC_DIR/package.json" ./package.json
           if [ ! -f package.json ]; then
-            printf '%s\n' '{"name":"kp-astrology-ai-pro","version":"14.0.0","private":true,"dependencies":{"@capacitor/core":"^6.1.2"},"devDependencies":{"@capacitor/android":"^6.1.2","@capacitor/cli":"^6.1.2"}}' > package.json
+            printf '%s\n' '{"name":"kp-astrology-ai-pro","version":"17.0.0","private":true,"dependencies":{"@capacitor/core":"^6.1.2"},"devDependencies":{"@capacitor/android":"^6.1.2","@capacitor/cli":"^6.1.2"}}' > package.json
           fi
 
           cat > capacitor.config.json << 'EOF'
@@ -128,7 +128,7 @@ jobs:
             },
             "android": {
               "allowMixedContent": true,
-              "backgroundColor": "#060d14"
+              "backgroundColor": "#070c14"
             }
           }
           EOF
@@ -139,11 +139,12 @@ jobs:
           npx cap add android
           npx cap sync android
 
-      - name: Apply Custom Midnight-Cyan App Icons & Permissions
+      - name: Enable Native 120Hz Display Mode, Hardware Acceleration & Custom Icons
         run: |
           python3 -c "import PIL" 2>/dev/null || python3 -m pip install --break-system-packages --quiet pillow || true
           python3 - << 'EOF'
           import os
+
           mf = 'android/app/src/main/AndroidManifest.xml'
           with open(mf, 'r', encoding='utf-8') as f:
               xml = f.read()
@@ -158,8 +159,75 @@ jobs:
                   xml = xml.replace('<application', p + '\n    <application', 1)
           if 'usesCleartextTraffic' not in xml:
               xml = xml.replace('<application', '<application android:usesCleartextTraffic="true"', 1)
+          if 'hardwareAccelerated' not in xml:
+              xml = xml.replace('<application', '<application android:hardwareAccelerated="true"', 1)
           with open(mf, 'w', encoding='utf-8') as f:
               f.write(xml)
+
+          ma = 'android/app/src/main/java/com/kpastrology/aipro/MainActivity.java'
+          if os.path.exists(ma):
+              java_code = '''package com.kpastrology.aipro;
+
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.view.Display;
+          import android.view.View;
+          import android.view.WindowManager;
+          import com.getcapacitor.BridgeActivity;
+
+          public class MainActivity extends BridgeActivity {
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  enableHighRefreshRate();
+              }
+
+              @Override
+              public void onResume() {
+                  super.onResume();
+                  enableHighRefreshRate();
+                  try {
+                      if (getBridge() != null && getBridge().getWebView() != null) {
+                          getBridge().getWebView().setLayerType(View.LAYER_TYPE_HARDWARE, null);
+                      }
+                  } catch (Exception ignored) {}
+              }
+
+              private void enableHighRefreshRate() {
+                  try {
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                          Display display = null;
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                              display = getDisplay();
+                          }
+                          if (display == null) {
+                              WindowManager wm = getWindowManager();
+                              if (wm != null) display = wm.getDefaultDisplay();
+                          }
+                          if (display != null) {
+                              Display.Mode current = display.getMode();
+                              Display.Mode best = current;
+                              for (Display.Mode m : display.getSupportedModes()) {
+                                  if (m.getPhysicalWidth() == current.getPhysicalWidth()
+                                          && m.getPhysicalHeight() == current.getPhysicalHeight()
+                                          && m.getRefreshRate() > best.getRefreshRate()) {
+                                      best = m;
+                                  }
+                              }
+                              WindowManager.LayoutParams lp = getWindow().getAttributes();
+                              lp.preferredDisplayModeId = best.getModeId();
+                              lp.preferredRefreshRate = best.getRefreshRate();
+                              getWindow().setAttributes(lp);
+                          }
+                      }
+                  } catch (Exception ignored) {}
+              }
+          }
+          '''
+              lines = [ln[10:] if ln.startswith('          ') else ln for ln in java_code.splitlines()]
+              with open(ma, 'w', encoding='utf-8') as f:
+                  f.write('\n'.join(lines) + '\n')
+              print("Patched MainActivity.java for Native 120Hz high refresh rate.")
 
           try:
               from PIL import Image
@@ -182,7 +250,7 @@ jobs:
               print("Icon step skipped:", e)
           EOF
 
-      - name: Build 100% Offline Android APK
+      - name: Build 120Hz Offline Android APK
         working-directory: android
         run: |
           chmod +x gradlew
@@ -197,14 +265,14 @@ jobs:
             gh release upload latest KP-Astrology-AI-Pro-Offline.apk --clobber
           else
             gh release create latest KP-Astrology-AI-Pro-Offline.apk \
-              --title "KP Astrology AI Pro (100% Offline Edition)" \
-              --notes "100% Offline Android APK with bundled Astronomy Engine, 447 KP Rules & Offline/Online AI Guru."
+              --title "KP Astrology AI Pro v17 (120Hz Offline Edition)" \
+              --notes "100% Offline 120Hz-unlocked Android APK with Compact Bento UI, bundled Astronomy Engine & KP AI Guru."
           fi
           OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           WEB_URL="https://${OWNER_LC}.github.io/${{ github.event.repository.name }}/"
           DL_URL="https://github.com/${{ github.repository }}/releases/latest/download/KP-Astrology-AI-Pro-Offline.apk"
-          echo "### 📲 Direct 100% Offline .APK Download Link" >> $GITHUB_STEP_SUMMARY
+          echo "### 📲 Direct 120Hz Offline .APK Download Link" >> $GITHUB_STEP_SUMMARY
           echo "[$DL_URL]($DL_URL)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🌐 Auto-Updating Live Web App (PWA)" >> $GITHUB_STEP_SUMMARY
+          echo "### 🌐 Live Web App (PWA)" >> $GITHUB_STEP_SUMMARY
           echo "[$WEB_URL]($WEB_URL)" >> $GITHUB_STEP_SUMMARY
