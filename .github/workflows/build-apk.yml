@@ -19,92 +19,215 @@ jobs:
   build-live-web:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Prepare Web + Silent OTA Auto-Update Bundle
+      - name: Prepare Web & OTA Bundle
         run: |
           ZIP_FILE=$(ls -t *.zip 2>/dev/null | head -n 1 || true)
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No .zip file found in repository root!"
-            exit 1
-          fi
-          rm -rf app_src www
-          mkdir -p app_src www
+          if [ -z "$ZIP_FILE" ]; then echo "ERROR: No .zip found!"; exit 1; fi
+          rm -rf app_src www && mkdir -p app_src www
           unzip -o "$ZIP_FILE" -d app_src
-
           SRC_DIR="app_src"
           if [ ! -f "$SRC_DIR/index.html" ]; then
             FOUND=$(find "$SRC_DIR" -maxdepth 3 -name "index.html" | head -n 1)
             [ -n "$FOUND" ] && SRC_DIR=$(dirname "$FOUND")
           fi
-
           for f in index.html index-si.html kp-ui.css kp-ui.js kp-ai.js kp-rules.js manifest.json manifest.webmanifest sw.js favicon.png icon-192.png icon-512.png icon-maskable-192.png icon-maskable-512.png apple-touch-icon.png og-image.png astronomy.browser.min.js; do
             [ -f "$SRC_DIR/$f" ] && cp "$SRC_DIR/$f" www/
           done
-
           curl -fsSL https://cdn.jsdelivr.net/npm/astronomy-engine@2.1.19/astronomy.browser.min.js -o www/astronomy.browser.min.js || true
           if [ -s www/astronomy.browser.min.js ]; then
             sed -i 's|https://cdn.jsdelivr.net/npm/astronomy-engine@2.1.19/astronomy.browser.min.js|astronomy.browser.min.js|g' www/index.html www/index-si.html
           fi
-
           OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          REPO_NAME="${{ github.event.repository.name }}"
-          BASE_URL="https://${OWNER_LC}.github.io/${REPO_NAME}"
+          BASE_URL="https://${OWNER_LC}.github.io/${{ github.event.repository.name }}"
           BUILD_VER="v-${GITHUB_SHA:0:10}"
-
           cat > www/ota-update.js << 'OTA_EOF'
-          (function () {
-            var CU = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorUpdater;
-            if (!CU) return;
-            try { CU.notifyAppReady(); } catch (e) {}
-
-            var BASE = window.KP_OTA_BASE || '';
-            var BUILT = window.KP_OTA_BUILT_VER || '';
-            if (!BASE) return;
-
-            var SI = /[\u0D80-\u0DFF]/.test((document.title || '') + (document.body ? document.body.innerText.slice(0, 200) : '')) || document.documentElement.lang === 'si';
-
-            function showBanner(bundleId) {
-              if (document.getElementById('kp-ota-bar')) return;
-              var bar = document.createElement('div');
-              bar.id = 'kp-ota-bar';
-              bar.style.cssText = 'position:fixed;left:12px;right:12px;bottom:calc(68px + env(safe-area-inset-bottom));z-index:99;background:#0f2536;color:#eef7fb;border:1px solid #38bdf8;border-radius:14px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px;box-shadow:0 8px 24px rgba(0,0,0,.5);font:600 12.5px system-ui,sans-serif';
-              bar.innerHTML = '<span>✨ ' + (SI ? 'නව සංස්කරණය බාගත විය!' : 'New update downloaded!') + '</span>' +
-                '<button id="kp-ota-go" style="background:linear-gradient(135deg,#38bdf8,#0ea5e9);color:#04131e;border:0;border-radius:9px;padding:7px 12px;font-weight:800;font-size:12px;min-height:32px;margin:0">' +
-                (SI ? 'දැන් යොදන්න' : 'Apply Now') + '</button>';
-              document.body.appendChild(bar);
-              document.getElementById('kp-ota-go').onclick = function () {
-                CU.set({ id: bundleId }).catch(function () {});
-              };
+          (function(){
+            var CU=window.Capacitor&&window.Capacitor.Plugins&&window.Capacitor.Plugins.CapacitorUpdater;
+            if(!CU)return;
+            try{CU.notifyAppReady();}catch(e){}
+            var BASE=window.KP_OTA_BASE||'',BUILT=window.KP_OTA_BUILT_VER||'';
+            if(!BASE)return;
+            var SI=/[\u0D80-\u0DFF]/.test(document.title||(document.body?document.body.innerText.slice(0,120):''))||document.documentElement.lang==='si';
+            function banner(id){
+              if(document.getElementById('kp-ota-bar'))return;
+              var b=document.createElement('div');b.id='kp-ota-bar';
+              b.style.cssText='position:fixed;left:12px;right:12px;bottom:calc(68px + env(safe-area-inset-bottom));z-index:99;background:#0f2536;color:#eef7fb;border:1px solid #38bdf8;border-radius:14px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px;box-shadow:0 8px 24px rgba(0,0,0,.5);font:600 12.5px system-ui,sans-serif';
+              b.innerHTML='<span>✨ '+(SI?'නව සංස්කරණය බාගත විය!':'New update downloaded!')+'</span><button id="kp-ota-go" style="background:linear-gradient(135deg,#38bdf8,#0ea5e9);color:#04131e;border:0;border-radius:9px;padding:7px 12px;font-weight:800;font-size:12px;min-height:32px;margin:0">'+(SI?'දැන් යොදන්න':'Apply Now')+'</button>';
+              document.body.appendChild(b);
+              document.getElementById('kp-ota-go').onclick=function(){CU.set({id:id}).catch(function(){});};
             }
-
-            async function checkUpdate() {
-              if (!navigator.onLine) return;
-              try {
-                var cur = await CU.current();
-                var running = (cur && cur.bundle && cur.bundle.id !== 'builtin' && cur.bundle.version) ? cur.bundle.version : BUILT;
-                var resp = await fetch(BASE + '/ota-version.json?t=' + Date.now(), { cache: 'no-store' });
-                if (!resp.ok) return;
-                var info = await resp.json();
-                if (!info || !info.version || !info.url || info.version === running) return;
-
-                var dl = await CU.download({ url: info.url, version: info.version });
-                if (dl && dl.id) {
-                  try { await CU.next({ id: dl.id }); } catch (e) {}
-                  showBanner(dl.id);
-                  try {
-                    var list = await CU.list();
-                    if (list && Array.isArray(list.bundles)) {
-                      list.bundles.forEach(function (b) {
-                        if (b.id && b.id !== 'builtin' && b.id !== dl.id && (!cur.bundle || b.id !== cur.bundle.id)) {
-                          CU.delete({ id: b.id }).catch(function () {});
-                        }
-                      });
-                    }
-                  } catch (e) {}
+            async function check(){
+              if(!navigator.onLine)return;
+              try{
+                var cur=await CU.current();
+                var run=(cur&&cur.bundle&&cur.bundle.id!=='builtin'&&cur.bundle.version)?cur.bundle.version:BUILT;
+                var r=await fetch(BASE+'/ota-version.json?t='+Date.now(),{cache:'no-store'});
+                if(!r.ok)return;
+                var info=await r.json();
+                if(!info||!info.version||!info.url||info.version===run)return;
+                var dl=await CU.download({url:info.url,version:info.version});
+                if(dl&&dl.id){
+                  try{await CU.next({id:dl.id});}catch(e){}
+                  banner(dl.id);
+                  try{
+                    var ls=await CU.list();
+                    if(ls&&Array.isArray(ls.bundles))ls.bundles.forEach(function(x){
+                      if(x.id&&x.id!=='builtin'&&x.id!==dl.id&&(!cur.bundle||x.id!==cur.bundle.id))CU.delete({id:x.id}).catch(function(){});
+                    });
+                  }catch(e){}
                 }
-              } catch (e) {}
+              }catch(e){}
             }
+            window.addEventListener('load',function(){setTimeout(check,2500);});
+            document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible')setTimeout(check,1500);});
+          })();
+          OTA_EOF
+          python3 - "$BUILD_VER" "$BASE_URL" << 'PY_EOF'
+          import sys, os, json, zipfile
+          ver, base = sys.argv[1], sys.argv[2]
+          tag = f'<script>window.KP_OTA_BUILT_VER="{ver}";window.KP_OTA_BASE="{base}";</script><script src="ota-update.js"></script>'
+          for fn in ['www/index.html', 'www/index-si.html']:
+              if os.path.exists(fn):
+                  s = open(fn, encoding='utf-8').read()
+                  if 'ota-update.js' not in s:
+                      s = s.replace('</body>', tag + '</body>', 1)
+                  open(fn, 'w', encoding='utf-8').write(s)
+          json.dump({'version': ver, 'url': base + '/ota-bundle.zip'}, open('www/ota-version.json', 'w'))
+          with zipfile.ZipFile('ota-bundle.zip', 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+              for rt, _, fs in os.walk('www'):
+                  for fn in sorted(fs):
+                      if fn != 'ota-bundle.zip':
+                          fp = os.path.join(rt, fn)
+                          zf.write(fp, arcname=os.path.relpath(fp, 'www'))
+          os.replace('ota-bundle.zip', 'www/ota-bundle.zip')
+          PY_EOF
+          touch www/.nojekyll
 
-            window.addEventListener('load',
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: 'www'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kp-www
+          path: www
+
+  deploy-live-web:
+    needs: build-live-web
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
+
+  build-offline-apk:
+    needs: build-live-web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: kp-www
+          path: www
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Capacitor, SDK 35, 120Hz & Icons
+        run: |
+          rm -f www/ota-bundle.zip www/ota-version.json www/.nojekyll
+          [ -f www/icon-512.png ] && cp www/icon-512.png ./icon-512.png
+          cat > package.json << 'EOF'
+          {"name":"kp-astrology-ai-pro","version":"24.0.0","private":true,"dependencies":{"@capacitor/core":"^6.1.2","@capgo/capacitor-updater":"^6.15.0"},"devDependencies":{"@capacitor/android":"^6.1.2","@capacitor/cli":"^6.1.2"}}
+          EOF
+          cat > capacitor.config.json << 'EOF'
+          {"appId":"com.kpastrology.aipro","appName":"KP Astrology AI Pro","webDir":"www","server":{"androidScheme":"https","cleartext":true},"plugins":{"CapacitorUpdater":{"autoUpdate":false,"resetWhenUpdate":true}},"android":{"allowMixedContent":true,"backgroundColor":"#070c14"}}
+          EOF
+          npm install --no-audit --no-fund
+          npx cap add android
+          npx cap sync android
+          python3 -c "import PIL" 2>/dev/null || python3 -m pip install --break-system-packages --quiet pillow || true
+          python3 - << 'PY_EOF'
+          import os, re
+          for path, pat, rep in [
+              ('android/variables.gradle', r'compileSdkVersion\s*=\s*\d+', 'compileSdkVersion = 35'),
+              ('android/build.gradle', r'com\.android\.tools\.build:gradle:[0-9.]+', 'com.android.tools.build:gradle:8.6.1'),
+              ('android/gradle/wrapper/gradle-wrapper.properties', r'gradle-[0-9.]+-(all|bin)\.zip', 'gradle-8.7-all.zip')
+          ]:
+              if os.path.exists(path):
+                  s = re.sub(pat, rep, open(path, encoding='utf-8').read())
+                  open(path, 'w', encoding='utf-8').write(s)
+
+          mf = 'android/app/src/main/AndroidManifest.xml'
+          xml = open(mf, encoding='utf-8').read()
+          for p in [
+              '<uses-permission android:name="android.permission.INTERNET" />',
+              '<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />',
+              '<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />',
+              '<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />'
+          ]:
+              if p not in xml: xml = xml.replace('<application', p + '\n    <application', 1)
+          if 'usesCleartextTraffic' not in xml: xml = xml.replace('<application', '<application android:usesCleartextTraffic="true"', 1)
+          if 'hardwareAccelerated' not in xml: xml = xml.replace('<application', '<application android:hardwareAccelerated="true"', 1)
+          open(mf, 'w', encoding='utf-8').write(xml)
+
+          ma = 'android/app/src/main/java/com/kpastrology/aipro/MainActivity.java'
+          if os.path.exists(ma):
+              java = '\n'.join([
+                  'package com.kpastrology.aipro;',
+                  'import android.os.Build;',
+                  'import android.os.Bundle;',
+                  'import android.view.Display;',
+                  'import android.view.View;',
+                  'import android.view.WindowManager;',
+                  'import com.getcapacitor.BridgeActivity;',
+                  'public class MainActivity extends BridgeActivity {',
+                  '  @Override public void onCreate(Bundle s) { super.onCreate(s); hiHz(); }',
+                  '  @Override public void onResume() { super.onResume(); hiHz(); try { if (getBridge()!=null && getBridge().getWebView()!=null) getBridge().getWebView().setLayerType(View.LAYER_TYPE_HARDWARE, null); } catch (Exception e) {} }',
+                  '  private void hiHz() { try { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) { Display d = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ? getDisplay() : getWindowManager().getDefaultDisplay(); if (d != null) { Display.Mode c = d.getMode(), b = c; for (Display.Mode m : d.getSupportedModes()) { if (m.getPhysicalWidth()==c.getPhysicalWidth() && m.getPhysicalHeight()==c.getPhysicalHeight() && m.getRefreshRate()>b.getRefreshRate()) b = m; } WindowManager.LayoutParams lp = getWindow().getAttributes(); lp.preferredDisplayModeId = b.getModeId(); lp.preferredRefreshRate = b.getRefreshRate(); getWindow().setAttributes(lp); } } } catch (Exception e) {} }',
+                  '}'
+              ])
+              open(ma, 'w', encoding='utf-8').write(java + '\n')
+
+          try:
+              from PIL import Image
+              if os.path.exists('icon-512.png'):
+                  src = Image.open('icon-512.png').convert('RGBA')
+                  for f, sz in {'mipmap-mdpi':48,'mipmap-hdpi':72,'mipmap-xhdpi':96,'mipmap-xxhdpi':144,'mipmap-xxxhdpi':192}.items():
+                      d = os.path.join('android/app/src/main/res', f)
+                      if os.path.isdir(d):
+                          im = src.resize((sz, sz), Image.Resampling.LANCZOS)
+                          for t in ['ic_launcher.png','ic_launcher_round.png','ic_launcher_foreground.png']:
+                              im.save(os.path.join(d, t), 'PNG')
+                  ad = 'android/app/src/main/res/mipmap-anydpi-v26'
+                  if os.path.isdir(ad):
+                      for fn in os.listdir(ad):
+                          if fn.endswith('.xml'): os.remove(os.path.join(ad, fn))
+          except Exception as e:
+              print('Icon skip:', e)
+          PY_EOF
+
+      - name: Build APK
+        working-directory: android
+        run: chmod +x gradlew && ./gradlew assembleDebug --no-daemon
+
+      - name: Publish Release APK
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk KP-Astrology-AI-Pro-Offline.apk
+          if gh release view latest >/dev/null 2>&1; then
+            gh release upload latest KP-Astrology-AI-Pro-Offline.apk --clobber
+          else
+            gh release create latest KP-Astrology-AI-Pro-Offline.apk --title "KP Astrology AI Pro (120Hz Offline + Auto-Update)" --notes "One-time install APK with 120Hz, 100% Offline & Silent OTA Auto-Update."
+          fi
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "### 📲 Direct APK: https://github.com/${{ github.repository }}/releases/latest/download/KP-Astrology-AI-Pro-Offline.apk" >> $GITHUB_STEP_SUMMARY
+          echo "### 🌐 Live Web: https://${OWNER_LC}.github.io/${{ github.event.repository.name }}/" >> $GITHUB_STEP_SUMMARY
