@@ -1,0 +1,381 @@
+name: Build Windows PC Software (.exe Installer & Portable — Obfuscated)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Prepare 100% Offline Desktop App & Electron Files
+        shell: bash
+        run: |
+          set -e
+          ZIP_FILE=$(ls -t *.zip 2>/dev/null | head -n 1 || true)
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No .zip file found in repository root!"
+            exit 1
+          fi
+          echo "Building Windows PC Software from: $ZIP_FILE"
+
+          rm -rf app_src pc_build
+          mkdir -p app_src pc_build/www pc_build/electron pc_build/build
+          unzip -o "$ZIP_FILE" -d app_src
+
+          SRC_DIR="app_src"
+          if [ ! -f "$SRC_DIR/index.html" ]; then
+            FOUND=$(find "$SRC_DIR" -maxdepth 3 -name "index.html" | head -n 1)
+            [ -n "$FOUND" ] && SRC_DIR=$(dirname "$FOUND")
+          fi
+
+          for f in index.html index-si.html kp-ui.css kp-ui.js kp-ai.js kp-rules.js manifest.json manifest.webmanifest sw.js favicon.png icon-192.png icon-512.png icon-maskable-192.png icon-maskable-512.png apple-touch-icon.png og-image.png astronomy.browser.min.js; do
+            [ -f "$SRC_DIR/$f" ] && cp "$SRC_DIR/$f" pc_build/www/
+          done
+
+          # Bundle Astronomy Engine 100% Offline inside the .exe
+          curl -fsSL https://cdn.jsdelivr.net/npm/astronomy-engine@2.1.19/astronomy.browser.min.js -o pc_build/www/astronomy.browser.min.js || true
+          if [ -s pc_build/www/astronomy.browser.min.js ]; then
+            sed -i 's|https://cdn.jsdelivr.net/npm/astronomy-engine@2.1.19/astronomy.browser.min.js|astronomy.browser.min.js|g' pc_build/www/index.html pc_build/www/index-si.html
+          fi
+
+          # Generate multi-resolution Windows .ico icon from icon-512.png
+          if [ -f "$SRC_DIR/icon-512.png" ]; then
+            cp "$SRC_DIR/icon-512.png" pc_build/build/icon.png
+            python -c "import PIL" 2>/dev/null || python -m pip install --quiet pillow || true
+            python -c "from PIL import Image; Image.open('pc_build/build/icon.png').convert('RGBA').save('pc_build/build/icon.ico', format='ICO', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)]); print('Generated multi-size icon.ico via Pillow.')" || node -e "const fs=require('fs'),p=fs.readFileSync('pc_build/build/icon.png'),h=Buffer.alloc(22);h.writeUInt16LE(0,0);h.writeUInt16LE(1,2);h.writeUInt16LE(1,4);h.writeUInt16LE(1,10);h.writeUInt16LE(32,12);h.writeUInt32LE(p.length,14);h.writeUInt32LE(22,18);fs.writeFileSync('pc_build/build/icon.ico',Buffer.concat([h,p]));console.log('Generated icon.ico via Node fallback.');"
+          fi
+
+          # Write Electron preload.js (Secure Hardware ID + Native A4 PDF + Native Printer Bridge)
+          cat > pc_build/electron/preload.js << 'EOF'
+          const { contextBridge, ipcRenderer } = require('electron');
+
+          contextBridge.exposeInMainWorld('KPDesktop', {
+            isDesktop: true,
+            platform: process.platform,
+            getHardwareId: () => ipcRenderer.sendSync('kp:get-hwid'),
+            savePdf: (html, defaultName) => ipcRenderer.invoke('kp:save-pdf', { html, defaultName }),
+            printHtml: (html, title) => ipcRenderer.invoke('kp:print-html', { html, title }),
+            openExternal: (url) => ipcRenderer.invoke('kp:open-external', url)
+          });
+          EOF
+
+          # Write Electron main.js (Desktop Window, Windows Hardware Lock, A4 PDF & Printer)
+          cat > pc_build/electron/main.js << 'EOF'
+          const { app, BrowserWindow, Menu, ipcMain, dialog, shell } = require('electron');
+          const path = require('path');
+          const fs = require('fs');
+          const os = require('os');
+          const crypto = require('crypto');
+          const { execSync } = require('child_process');
+
+          let mainWin = null;
+          let cachedHwid = null;
+
+          function computeHardwareId() {
+            if (cachedHwid) return cachedHwid;
+            let raw = '';
+            try {
+              const out = execSync('reg query "HKLM\\SOFTWARE\\Microsoft\\Cryptography" /v MachineGuid', {
+                encoding: 'utf8',
+                timeout: 3000,
+                windowsHide: true
+              });
+              const m = /MachineGuid\s+REG_SZ\s+([0-9a-fA-F-]+)/.exec(out);
+              if (m && m[1]) raw = m[1].trim().toLowerCase();
+            } catch (e) {}
+            if (!raw) {
+              const cpus = os.cpus() || [];
+              raw = [os.hostname(), os.platform(), os.arch(), cpus[0] ? cpus[0].model : 'pc'].join('|');
+            }
+            const hash = crypto.createHash('sha256').update('KP-WIN-HWID-V1|' + raw).digest();
+            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+            let s1 = '', s2 = '';
+            for (let i = 0; i < 4; i++) {
+              s1 += chars[hash[i] % chars.length];
+              s2 += chars[hash[i + 4] % chars.length];
+            }
+            cachedHwid = 'KP-' + s1 + '-' + s2;
+            return cachedHwid;
+          }
+
+          function createWindow() {
+            const icoPath = path.join(__dirname, '..', 'build', 'icon.ico');
+            mainWin = new BrowserWindow({
+              width: 1280,
+              height: 820,
+              minWidth: 960,
+              minHeight: 640,
+              title: 'KP Astrology AI Pro — Professional Desktop Edition',
+              show: false,
+              backgroundColor: '#070c14',
+              icon: fs.existsSync(icoPath) ? icoPath : undefined,
+              autoHideMenuBar: false,
+              webPreferences: {
+                preload: path.join(__dirname, 'preload.js'),
+                contextIsolation: true,
+                nodeIntegration: false,
+                sandbox: false
+              }
+            });
+
+            const wwwDir = path.join(__dirname, '..', 'www');
+            const siFile = path.join(wwwDir, 'index-si.html');
+            const enFile = path.join(wwwDir, 'index.html');
+            mainWin.loadFile(fs.existsSync(siFile) ? siFile : enFile);
+            mainWin.once('ready-to-show', () => { mainWin.maximize(); mainWin.show(); });
+
+            mainWin.webContents.setWindowOpenHandler(({ url }) => {
+              if (/^https?:\/\//i.test(url)) {
+                shell.openExternal(url);
+                return { action: 'deny' };
+              }
+              return { action: 'allow' };
+            });
+
+            const menuTpl = [
+              {
+                label: 'File',
+                submenu: [
+                  {
+                    label: '🇱🇰 සිංහල (Sinhala)',
+                    click: () => { if (fs.existsSync(siFile)) mainWin.loadFile(siFile); }
+                  },
+                  {
+                    label: '🇬🇧 English',
+                    click: () => { if (fs.existsSync(enFile)) mainWin.loadFile(enFile); }
+                  },
+                  { type: 'separator' },
+                  {
+                    label: '🖨️ Print Current Screen',
+                    accelerator: 'CmdOrCtrl+P',
+                    click: () => mainWin.webContents.print({ silent: false, printBackground: true })
+                  },
+                  { type: 'separator' },
+                  { role: 'quit', label: 'Exit' }
+                ]
+              },
+              {
+                label: 'View',
+                submenu: [
+                  { role: 'reload' },
+                  { type: 'separator' },
+                  { role: 'resetZoom' },
+                  { role: 'zoomIn' },
+                  { role: 'zoomOut' },
+                  { type: 'separator' },
+                  { role: 'togglefullscreen' }
+                ]
+              },
+              {
+                label: 'Help',
+                submenu: [
+                  {
+                    label: 'Show PC Hardware ID',
+                    click: () => {
+                      dialog.showMessageBox(mainWin, {
+                        type: 'info',
+                        title: 'KP Astrology AI Pro — PC License ID',
+                        message: 'PC Hardware ID: ' + computeHardwareId(),
+                        detail: 'W. Vihanga Rasanjana Withanage — KP Astrology AI Pro Desktop (100% Offline)'
+                      });
+                    }
+                  }
+                ]
+              }
+            ];
+            Menu.setApplicationMenu(Menu.buildFromTemplate(menuTpl));
+          }
+
+          ipcMain.on('kp:get-hwid', (e) => {
+            e.returnValue = computeHardwareId();
+          });
+
+          ipcMain.handle('kp:open-external', async (_e, url) => {
+            if (/^https?:\/\//i.test(String(url || ''))) await shell.openExternal(url);
+          });
+
+          async function loadHtmlInHiddenWin(html) {
+            const tmpFile = path.join(os.tmpdir(), 'kp-report-' + Date.now() + '.html');
+            fs.writeFileSync(tmpFile, html, 'utf8');
+            const w = new BrowserWindow({
+              show: false,
+              width: 900,
+              height: 1200,
+              webPreferences: { nodeIntegration: false, contextIsolation: true }
+            });
+            await w.loadFile(tmpFile);
+            await new Promise((r) => setTimeout(r, 250));
+            return { w, tmpFile };
+          }
+
+          ipcMain.handle('kp:save-pdf', async (_e, { html, defaultName }) => {
+            const safe = String(defaultName || 'KP-Astrology-Report').replace(/[\\/:*?"<>|]+/g, '_');
+            const pick = await dialog.showSaveDialog(mainWin, {
+              title: 'Save KP A4 PDF Report',
+              defaultPath: path.join(app.getPath('documents'), safe + '.pdf'),
+              filters: [{ name: 'PDF Document', extensions: ['pdf'] }]
+            });
+            if (pick.canceled || !pick.filePath) return { canceled: true };
+            const { w, tmpFile } = await loadHtmlInHiddenWin(html);
+            try {
+              const buf = await w.webContents.printToPDF({
+                pageSize: 'A4',
+                printBackground: true,
+                margins: { top: 0.4, bottom: 0.4, left: 0.4, right: 0.4 }
+              });
+              fs.writeFileSync(pick.filePath, buf);
+              shell.openPath(pick.filePath);
+              return { saved: true, path: pick.filePath };
+            } finally {
+              w.destroy();
+              try { fs.unlinkSync(tmpFile); } catch (e) {}
+            }
+          });
+
+          ipcMain.handle('kp:print-html', async (_e, { html }) => {
+            const { w, tmpFile } = await loadHtmlInHiddenWin(html);
+            return new Promise((resolve) => {
+              w.webContents.print({ silent: false, printBackground: true }, (ok) => {
+                w.destroy();
+                try { fs.unlinkSync(tmpFile); } catch (e) {}
+                resolve({ printed: !!ok });
+              });
+            });
+          });
+
+          app.whenReady().then(() => {
+            createWindow();
+            app.on('activate', () => {
+              if (BrowserWindow.getAllWindows().length === 0) createWindow();
+            });
+          });
+
+          app.on('window-all-closed', () => {
+            if (process.platform !== 'darwin') app.quit();
+          });
+          EOF
+
+          # Write package.json for Electron + electron-builder (NSIS Setup + Portable .exe)
+          cat > pc_build/package.json << 'EOF'
+          {
+            "name": "kp-astrology-ai-pro-desktop",
+            "version": "43.0.0",
+            "description": "KP Astrology AI Pro — Professional Offline Desktop Software",
+            "author": "W. Vihanga Rasanjana Withanage",
+            "main": "electron/main.js",
+            "scripts": {
+              "dist": "electron-builder --win --x64"
+            },
+            "devDependencies": {
+              "electron": "^31.7.7",
+              "electron-builder": "^25.1.8"
+            },
+            "build": {
+              "appId": "com.kpastrology.aipro.desktop",
+              "productName": "KP Astrology AI Pro",
+              "directories": {
+                "buildResources": "build",
+                "output": "dist"
+              },
+              "files": [
+                "electron/**/*",
+                "www/**/*",
+                "build/icon.ico"
+              ],
+              "win": {
+                "icon": "build/icon.ico",
+                "target": [
+                  { "target": "nsis", "arch": ["x64"] },
+                  { "target": "portable", "arch": ["x64"] }
+                ]
+              },
+              "nsis": {
+                "oneClick": false,
+                "allowToChangeInstallationDirectory": true,
+                "createDesktopShortcut": true,
+                "createStartMenuShortcut": true,
+                "shortcutName": "KP Astrology AI Pro",
+                "artifactName": "KP-Astrology-AI-Pro-Windows-Setup.exe"
+              },
+              "portable": {
+                "artifactName": "KP-Astrology-AI-Pro-Windows-Portable.exe"
+              }
+            }
+          }
+          EOF
+
+      - name: Obfuscate Desktop App & Electron Code
+        working-directory: pc_build
+        shell: bash
+        run: |
+          set -e
+          npm install --no-save --no-audit --no-fund javascript-obfuscator
+          for jsf in www/kp-ui.js www/kp-ai.js; do
+            if [ -f "$jsf" ]; then
+              npx javascript-obfuscator "$jsf" --output "$jsf" \
+                --compact true \
+                --string-array true \
+                --string-array-encoding base64 \
+                --string-array-threshold 0.8 \
+                --rename-globals false \
+                --control-flow-flattening false \
+                --self-defending false \
+                --target browser
+              echo "Obfuscated $jsf for Windows .exe"
+            fi
+          done
+          npx javascript-obfuscator electron/main.js --output electron/main.js \
+            --compact true \
+            --string-array true \
+            --string-array-encoding base64 \
+            --string-array-threshold 0.75 \
+            --rename-globals false \
+            --control-flow-flattening false \
+            --self-defending false \
+            --target node
+          echo "Obfuscated electron/main.js for Windows .exe"
+
+      - name: Install Electron & Build Windows .exe (Setup + Portable)
+        working-directory: pc_build
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npm install --no-audit --no-fund
+          npm run dist
+
+      - name: Publish Windows .exe Files to GitHub Releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          SETUP_EXE="pc_build/dist/KP-Astrology-AI-Pro-Windows-Setup.exe"
+          PORT_EXE="pc_build/dist/KP-Astrology-AI-Pro-Windows-Portable.exe"
+          ls -lh pc_build/dist/
+
+          if gh release view latest >/dev/null 2>&1; then
+            gh release upload latest "$SETUP_EXE" "$PORT_EXE" --clobber
+          else
+            gh release create latest "$SETUP_EXE" "$PORT_EXE" \
+              --title "KP Astrology AI Pro (Android APK + Windows PC .exe)" \
+              --notes "100% Offline KP Astrology AI Pro for Android & Windows PC (Setup Installer + Pendrive Portable .exe)."
+          fi
+
+          SETUP_URL="https://github.com/${{ github.repository }}/releases/latest/download/KP-Astrology-AI-Pro-Windows-Setup.exe"
+          PORT_URL="https://github.com/${{ github.repository }}/releases/latest/download/KP-Astrology-AI-Pro-Windows-Portable.exe"
+          echo "### 💻 Windows PC Software Download Links" >> $GITHUB_STEP_SUMMARY
+          echo "- **Installer (Desktop Shortcut):** [KP-Astrology-AI-Pro-Windows-Setup.exe]($SETUP_URL)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Pendrive Portable (No Install):** [KP-Astrology-AI-Pro-Windows-Portable.exe]($PORT_URL)" >> $GITHUB_STEP_SUMMARY
