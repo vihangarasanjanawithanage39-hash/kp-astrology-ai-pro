@@ -32,7 +32,7 @@ jobs:
             FOUND=$(find "$SRC_DIR" -maxdepth 3 -name "index.html" | head -n 1)
             [ -n "$FOUND" ] && SRC_DIR=$(dirname "$FOUND")
           fi
-          for f in index.html index-si.html kp-ui.css kp-ui.js kp-ai.js kp-rules.js manifest.json manifest.webmanifest sw.js favicon.png icon-192.png icon-512.png icon-maskable-192.png icon-maskable-512.png apple-touch-icon.png og-image.png astronomy.browser.min.js; do
+          for f in index.html index-si.html kp-ui.css kp-ui.js kp-ai.js manifest.json manifest.webmanifest sw.js favicon.png icon-192.png icon-512.png icon-maskable-192.png icon-maskable-512.png apple-touch-icon.png og-image.png astronomy.browser.min.js; do
             [ -f "$SRC_DIR/$f" ] && cp "$SRC_DIR/$f" www/
           done
           curl -fsSL https://cdn.jsdelivr.net/npm/astronomy-engine@2.1.19/astronomy.browser.min.js -o www/astronomy.browser.min.js || true
@@ -140,12 +140,12 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Capacitor, SDK 35, 120Hz & Icons
+      - name: Setup Capacitor, SDK 35, 120Hz, Native A4 PDF & Icons
         run: |
           rm -f www/ota-bundle.zip www/ota-version.json www/.nojekyll
           [ -f www/icon-512.png ] && cp www/icon-512.png ./icon-512.png
           cat > package.json << 'EOF'
-          {"name":"kp-astrology-ai-pro","version":"24.0.0","private":true,"dependencies":{"@capacitor/core":"^6.1.2","@capgo/capacitor-updater":"^6.15.0"},"devDependencies":{"@capacitor/android":"^6.1.2","@capacitor/cli":"^6.1.2"}}
+          {"name":"kp-astrology-ai-pro","version":"29.0.0","private":true,"dependencies":{"@capacitor/core":"^6.1.2","@capgo/capacitor-updater":"^6.15.0"},"devDependencies":{"@capacitor/android":"^6.1.2","@capacitor/cli":"^6.1.2"}}
           EOF
           cat > capacitor.config.json << 'EOF'
           {"appId":"com.kpastrology.aipro","appName":"KP Astrology AI Pro","webDir":"www","server":{"androidScheme":"https","cleartext":true},"plugins":{"CapacitorUpdater":{"autoUpdate":false,"resetWhenUpdate":true}},"android":{"allowMixedContent":true,"backgroundColor":"#070c14"}}
@@ -183,15 +183,23 @@ jobs:
           if os.path.exists(ma):
               java = '\n'.join([
                   'package com.kpastrology.aipro;',
+                  'import android.content.Context;',
                   'import android.os.Build;',
                   'import android.os.Bundle;',
+                  'import android.print.PrintAttributes;',
+                  'import android.print.PrintManager;',
                   'import android.view.Display;',
                   'import android.view.View;',
                   'import android.view.WindowManager;',
+                  'import android.webkit.JavascriptInterface;',
+                  'import android.webkit.WebView;',
+                  'import android.webkit.WebViewClient;',
                   'import com.getcapacitor.BridgeActivity;',
                   'public class MainActivity extends BridgeActivity {',
-                  '  @Override public void onCreate(Bundle s) { super.onCreate(s); hiHz(); }',
-                  '  @Override public void onResume() { super.onResume(); hiHz(); try { if (getBridge()!=null && getBridge().getWebView()!=null) getBridge().getWebView().setLayerType(View.LAYER_TYPE_HARDWARE, null); } catch (Exception e) {} }',
+                  '  private WebView pWv;',
+                  '  @Override public void onCreate(Bundle s) { super.onCreate(s); hiHz(); addPr(); }',
+                  '  @Override public void onResume() { super.onResume(); hiHz(); addPr(); try { if (getBridge()!=null && getBridge().getWebView()!=null) getBridge().getWebView().setLayerType(View.LAYER_TYPE_HARDWARE, null); } catch (Exception e) {} }',
+                  '  private void addPr() { try { if (getBridge()!=null && getBridge().getWebView()!=null) getBridge().getWebView().addJavascriptInterface(new Object() { @JavascriptInterface public void printHtml(final String html, final String title) { runOnUiThread(() -> { try { WebView w = new WebView(MainActivity.this); w.setWebViewClient(new WebViewClient() { @Override public void onPageFinished(WebView v, String u) { try { PrintManager pm = (PrintManager) getSystemService(Context.PRINT_SERVICE); String j = (title!=null && !title.isEmpty()) ? title : "KP-Report"; pm.print(j, v.createPrintDocumentAdapter(j), new PrintAttributes.Builder().setMediaSize(PrintAttributes.MediaSize.ISO_A4).build()); } catch (Exception ignored) {} pWv = null; } }); pWv = w; w.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null); } catch (Exception ignored) {} }); } }, "AndroidPrint"); } catch (Exception ignored) {} }',
                   '  private void hiHz() { try { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) { Display d = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ? getDisplay() : getWindowManager().getDefaultDisplay(); if (d != null) { Display.Mode c = d.getMode(), b = c; for (Display.Mode m : d.getSupportedModes()) { if (m.getPhysicalWidth()==c.getPhysicalWidth() && m.getPhysicalHeight()==c.getPhysicalHeight() && m.getRefreshRate()>b.getRefreshRate()) b = m; } WindowManager.LayoutParams lp = getWindow().getAttributes(); lp.preferredDisplayModeId = b.getModeId(); lp.preferredRefreshRate = b.getRefreshRate(); getWindow().setAttributes(lp); } } } catch (Exception e) {} }',
                   '}'
               ])
@@ -227,7 +235,7 @@ jobs:
           if gh release view latest -R "${{ github.repository }}" >/dev/null 2>&1; then
             gh release upload latest KP-Astrology-AI-Pro-Offline.apk --clobber -R "${{ github.repository }}"
           else
-            gh release create latest KP-Astrology-AI-Pro-Offline.apk -R "${{ github.repository }}" --title "KP Astrology AI Pro (120Hz Offline + Auto-Update)" --notes "One-time install APK with 120Hz, 100% Offline & Silent OTA Auto-Update."
+            gh release create latest KP-Astrology-AI-Pro-Offline.apk -R "${{ github.repository }}" --title "KP Astrology AI Pro (120Hz Offline + Auto-Update + Native PDF)" --notes "One-time install APK with 120Hz, 100% Offline, Native A4 PDF Print & Silent OTA Auto-Update."
           fi
           OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "### 📲 Direct APK: https://github.com/${{ github.repository }}/releases/latest/download/KP-Astrology-AI-Pro-Offline.apk" >> $GITHUB_STEP_SUMMARY
