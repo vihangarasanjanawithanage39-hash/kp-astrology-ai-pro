@@ -66,6 +66,8 @@ jobs:
             isDesktop: true,
             platform: process.platform,
             getHardwareId: () => ipcRenderer.sendSync('kp:get-hwid'),
+            readClipboard: () => ipcRenderer.sendSync('kp:read-clip'),
+            writeClipboard: (txt) => ipcRenderer.sendSync('kp:write-clip', String(txt || '')),
             savePdf: (html, defaultName) => ipcRenderer.invoke('kp:save-pdf', { html, defaultName }),
             printHtml: (html, title) => ipcRenderer.invoke('kp:print-html', { html, title }),
             openExternal: (url) => ipcRenderer.invoke('kp:open-external', url)
@@ -74,7 +76,7 @@ jobs:
 
           # Write Electron main.js (Desktop Window, Windows Hardware Lock, A4 PDF & Printer)
           cat > pc_build/electron/main.js << 'EOF'
-          const { app, BrowserWindow, Menu, ipcMain, dialog, shell } = require('electron');
+          const { app, BrowserWindow, Menu, ipcMain, dialog, shell, clipboard } = require('electron');
           const path = require('path');
           const fs = require('fs');
           const os = require('os');
@@ -120,7 +122,7 @@ jobs:
               minHeight: 640,
               title: 'KP Astrology AI Pro — Professional Desktop Edition',
               show: false,
-              backgroundColor: '#070c14',
+              backgroundColor: '#eef2f6',
               icon: fs.existsSync(icoPath) ? icoPath : undefined,
               autoHideMenuBar: false,
               webPreferences: {
@@ -145,6 +147,24 @@ jobs:
               return { action: 'allow' };
             });
 
+            // Native Windows Right-Click Context Menu (Cut / Copy / Paste / Select All)
+            mainWin.webContents.on('context-menu', (_ev, params) => {
+              const items = [];
+              if (params.isEditable) {
+                items.push({ role: 'cut', label: 'Cut' });
+                items.push({ role: 'copy', label: 'Copy' });
+                items.push({ role: 'paste', label: 'Paste' });
+                items.push({ type: 'separator' });
+                items.push({ role: 'selectAll', label: 'Select All' });
+              } else if (params.selectionText && params.selectionText.trim().length > 0) {
+                items.push({ role: 'copy', label: 'Copy' });
+                items.push({ role: 'selectAll', label: 'Select All' });
+              }
+              if (items.length > 0) {
+                Menu.buildFromTemplate(items).popup({ window: mainWin });
+              }
+            });
+
             const menuTpl = [
               {
                 label: 'File',
@@ -165,6 +185,18 @@ jobs:
                   },
                   { type: 'separator' },
                   { role: 'quit', label: 'Exit' }
+                ]
+              },
+              {
+                label: 'Edit',
+                submenu: [
+                  { role: 'undo' },
+                  { role: 'redo' },
+                  { type: 'separator' },
+                  { role: 'cut' },
+                  { role: 'copy' },
+                  { role: 'paste' },
+                  { role: 'selectAll' }
                 ]
               },
               {
@@ -201,6 +233,12 @@ jobs:
 
           ipcMain.on('kp:get-hwid', (e) => {
             e.returnValue = computeHardwareId();
+          });
+          ipcMain.on('kp:read-clip', (e) => {
+            try { e.returnValue = clipboard.readText() || ''; } catch (err) { e.returnValue = ''; }
+          });
+          ipcMain.on('kp:write-clip', (e, txt) => {
+            try { clipboard.writeText(String(txt || '')); e.returnValue = true; } catch (err) { e.returnValue = false; }
           });
 
           ipcMain.handle('kp:open-external', async (_e, url) => {
@@ -272,7 +310,7 @@ jobs:
           cat > pc_build/package.json << 'EOF'
           {
             "name": "kp-astrology-ai-pro-desktop",
-            "version": "43.0.0",
+            "version": "44.0.0",
             "description": "KP Astrology AI Pro — Professional Offline Desktop Software",
             "author": "W. Vihanga Rasanjana Withanage",
             "main": "electron/main.js",
